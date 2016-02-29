@@ -47,14 +47,26 @@ val enable : ?level:Syslog.level -> string -> unit
  *  only this log level, otherwise all levels for the given [brand] are enabled.
  *  This function is idempotent. *)
 
+val set_level : Syslog.level -> unit
+(** [set_level level] Disable all log output below [level].
+ *  This function is idempotent. *)
+
+val is_disabled : string -> Syslog.level -> bool
+(** [is_disabled brand level] returns [true] if logging for [brand] at [level] is disabled,
+ *  otherwise returns [false]. *)
+
 val disabled_modules : unit -> (string * Syslog.level) list
 (** List describing which modules have logging currently disabled *)
+
+val reset_levels: unit -> unit
+(** Reset logging levels to defaults *)
 
 val log_to_stdout : unit -> unit
 (** [log_to_stdout ()] will echo all log output to stdout (not the default) *)
 
 val log_backtrace: exn -> Backtrace.t -> unit
 (** Write the backtrace associated with [exn] to the log *)
+
 
 module type DEBUG = sig
 	(** Debug function *)
