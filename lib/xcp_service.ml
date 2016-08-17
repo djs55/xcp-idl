@@ -11,7 +11,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU Lesser General Public License for more details.
  *)
-
+open Stdext
 module StringSet = Set.Make(String)
 
 (* Server configuration. We have built-in (hopefully) sensible defaults,
@@ -25,6 +25,7 @@ let config_dir = ref (Printf.sprintf "/etc/%s.conf.d" default_service_name)
 let pidfile = ref (Printf.sprintf "/var/run/%s.pid" default_service_name)
 let extra_search_path = ref []
 let log_destination = ref "syslog:daemon"
+let log_level = ref Syslog.Debug
 let daemon = ref false
 let have_daemonized () = Unix.getppid () = 1
 
@@ -153,18 +154,30 @@ let common_options = [
 	"log", Arg.Set_string log_destination, (fun () -> !log_destination), "Where to write log messages";
 	"daemon", Arg.Bool (fun x -> daemon := x), (fun () -> string_of_bool !daemon), "True if we are to daemonise";
 	"disable-logging-for", Arg.String
-		(fun x ->
-      debug "Parsing [%s]" x;
+		(fun x -> debug "Parsing [%s]" x;
 			try
 				let modules = List.filter (fun x -> x <> "") (split_c ' ' x) in
 				List.iter Debug.disable modules
 			with e ->
 				error "Processing disabled-logging-for = %s: %s" x (Printexc.to_string e)
-		), (fun () -> String.concat " " (setify (List.map fst !Debug.logging_disabled_for))), "A space-separated list of debug modules to suppress logging from";
+		), (fun () -> String.concat " " (setify (List.map fst (Debug.disabled_modules ())))), "A space-separated list of debug modules to suppress logging from";
+
+	"loglevel", Arg.String 
+		(fun x ->
+			debug "Parsing [%s]" x;
+			try
+				log_level := Syslog.level_of_string x;
+				Debug.set_level !log_level
+			with e ->
+				error "Processing loglevel = %s: %s" x (Printexc.to_string e)), 
+		(fun () -> Syslog.string_of_level !log_level), "Log level";
+
 	"inventory", Arg.Set_string Inventory.inventory_filename, (fun () -> !Inventory.inventory_filename), "Location of the inventory file";
 	"config", Arg.Set_string config_file, (fun () -> !config_file), "Location of configuration file";
 	"config-dir", Arg.Set_string config_dir, (fun () -> !config_dir), "Location of directory containing configuration file fragments";
 ]
+
+let loglevel () = !log_level
 
 module Term = Cmdliner.Term
 
@@ -527,7 +540,7 @@ let pidfile_write filename =
 
 (* Cf Stevens et al, Advanced Programming in the UNIX Environment,
 	 Section 13.3 *)
-let daemonize () =
+let daemonize ?start_fn () =
 	if not (have_daemonized ())
 	then
 		ign_int (Unix.umask 0);
@@ -537,20 +550,23 @@ let daemonize () =
 		Sys.set_signal Sys.sighup Sys.Signal_ignore;
 		(match Unix.fork () with
 		| 0 ->
+			Opt.iter (fun fn -> fn ()) start_fn;
 			Unix.chdir "/";
 			mkdir_rec (Filename.dirname !pidfile) 0o755;
 			pidfile_write !pidfile;
-			Unix.close Unix.stdin;
-			Unix.close Unix.stdout;
-			Unix.close Unix.stderr;
 			let nullfd = Unix.openfile "/dev/null" [ Unix.O_RDWR ] 0 in
-			assert (nullfd = Unix.stdin);
-			let (_:Unix.file_descr) = Unix.dup nullfd in ();
-			let (_:Unix.file_descr) = Unix.dup nullfd in ();
-	  | _ -> exit 0)
+			Unix.dup2 nullfd Unix.stdin;
+			Unix.dup2 nullfd Unix.stdout;
+			Unix.dup2 nullfd Unix.stderr;
+			Unix.close nullfd
+		| _ -> exit 0)
 	| _ -> exit 0
 
-let maybe_daemonize () = if !daemon then daemonize ()
+let maybe_daemonize ?start_fn () =
+	if !daemon then
+		daemonize ?start_fn ()
+	else
+		Opt.iter (fun fn -> fn ()) start_fn
 
 let wait_forever () =
 	while true do
